@@ -206,6 +206,30 @@ def do_backup(conn, table_name, read_capacity):
 
   logging.info("Backup for " + table_name + " table completed. Time taken: " + str(datetime.datetime.now().replace(microsecond=0) - start_time))
 
+def writer_worker(id, data_file_list, conn, source_table, destination_table, dump_data_path):
+
+  while data_file_list:
+    data_file = data_file_list.pop()
+    logging.info("Worker: " +str(id) + " Processing " + data_file + " of " + destination_table)
+    items = []
+    item_data = json.load(open(dump_data_path + "/" + source_table + "/" + DATA_DIR + "/" + data_file))
+    items.extend(item_data["Items"])
+
+    # batch write data
+    put_requests = []
+    while len(items) > 0:
+      put_requests.append({"PutRequest": {"Item": items.pop(0)}})
+
+      # flush every MAX_BATCH_WRITE
+      if len(put_requests) == MAX_BATCH_WRITE:
+        # logging.info("Worker: " + str(id) + " Writing next " + str(MAX_BATCH_WRITE) + " items to " + destination_table + "..")
+        batch_write(conn, sleep_interval, destination_table, put_requests)
+        del put_requests[:]
+
+      #flush remainder
+      if len(put_requests) > 0:
+        batch_write(conn, sleep_interval, destination_table, put_requests)
+
 def do_restore(conn, sleep_interval, source_table, destination_table, write_capacity):
   logging.info("Starting restore for " + source_table + " to " + destination_table + "..")
 
@@ -274,28 +298,18 @@ def do_restore(conn, sleep_interval, source_table, destination_table, write_capa
   data_file_list = os.listdir(dump_data_path + "/" + source_table + "/" + DATA_DIR + "/")
   data_file_list.sort()
 
-  for data_file in data_file_list:
-    logging.info("Processing " + data_file + " of " + destination_table)
-    items = []
-    item_data = json.load(open(dump_data_path + "/" + source_table + "/" + DATA_DIR + "/" + data_file))
-    items.extend(item_data["Items"])
+  # spawn 5 worker threads...
+  threads = []
+  for i in range(5):
+    t = threading.Thread(target=writer_worker, args=(i, data_file_list, conn, source_table, destination_table, dump_data_path,))
+    threads.append(t)
+    t.start()
+    time.sleep(THREAD_START_DELAY)
 
-    # batch write data
-    put_requests = []
-    while len(items) > 0:
-      put_requests.append({"PutRequest": {"Item": items.pop(0)}})
+  for thread in threads:
+    thread.join()
 
-      # flush every MAX_BATCH_WRITE
-      if len(put_requests) == MAX_BATCH_WRITE:
-        logging.debug("Writing next " + str(MAX_BATCH_WRITE) + " items to " + destination_table + "..")
-        batch_write(conn, sleep_interval, destination_table, put_requests)
-        del put_requests[:]
-
-    # flush remainder
-    if len(put_requests) > 0:
-      batch_write(conn, sleep_interval, destination_table, put_requests)
-
-  # revert to original table write capacity if it has been modified
+ # revert to original table write capacity if it has been modified
   if write_capacity != original_write_capacity:
     update_provisioned_throughput(conn, destination_table, original_read_capacity, original_write_capacity, False)
 
