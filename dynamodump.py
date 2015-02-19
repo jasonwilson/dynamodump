@@ -226,9 +226,9 @@ def writer_worker(id, data_file_list, conn, source_table, destination_table, dum
         batch_write(conn, sleep_interval, destination_table, put_requests)
         del put_requests[:]
 
-      #flush remainder
-      if len(put_requests) > 0:
-        batch_write(conn, sleep_interval, destination_table, put_requests)
+    #flush remainder
+    if len(put_requests) > 0:
+      batch_write(conn, sleep_interval, destination_table, put_requests)
 
 def do_restore(conn, sleep_interval, source_table, destination_table, write_capacity):
   logging.info("Starting restore for " + source_table + " to " + destination_table + "..")
